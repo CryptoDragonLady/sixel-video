@@ -1,17 +1,44 @@
 # sixel-video
 
-Convert videos into bzip2-compressed sixel animations for graphics-capable
-terminals. Conversion happens once; playback needs a decompressor and frame
-pacing, with no video decoder or sixel encoder.
+**Turn an MP4 into video your terminal can draw.**
 
-The converter supports full frames, exact delta updates, configurable keyframe
-intervals, compression-aware frame selection, and conversion progress with an
-ETA. On terminals that advertise sixel support, verbose progress uses a sixel
-bar; other terminals and redirected logs receive text progress.
+[![Tests](https://github.com/CryptoDragonLady/sixel-video/actions/workflows/test.yml/badge.svg)](https://github.com/CryptoDragonLady/sixel-video/actions/workflows/test.yml)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://github.com/CryptoDragonLady/sixel-video/blob/main/pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+Convert once into **SIXEL or Kitty graphics**, then let the terminal render the
+result. Keep it simple with full frames, send less data with exact deltas, or
+experiment with optional quality and compression controls. Kitty animations can
+even carry their own timing: decompress the file into a compatible terminal and
+watch it play, without a separate video player.
+
+- **Two native graphics protocols.** SIXEL palettes or lossless Kitty true color.
+- **Paint what changes.** Delta frames, periodic keyframes, and region selection.
+- **Choose your tradeoff.** Compare terminal bytes with estimated compressed size;
+  try denoising and bounded color skipping independently.
+- **See conversion progress.** Frame counts, speed, ETA, and a SIXEL progress bar
+  when supported, with text fallback.
+- **Portable output.** Self-contained files with optional bzip2 compression;
+  Kitty payloads use inline transmission, including over SSH.
+
+```sh
+# SIXEL: exact updates relative to the quantized full-frame output
+sixel-video input.mp4 clip.sixel.bz2 --delta --verbose
+
+# Kitty: full-color patches and timing handled by the terminal
+sixel-video input.mp4 clip.kitty.bz2 --format kitty --delta --delta-region adaptive --verbose
+bzcat clip.kitty.bz2
+```
+
+Kitty's native animation mode requires animation support, beyond basic Kitty
+image support. SIXEL and Kitty stream mode require external frame pacing. The
+converter preserves source dimensions and decodes video frames only during
+conversion; audio is not included.
 
 ## Install
 
-Install libsixel and Python 3.10 or newer. On Debian or Ubuntu:
+Use Python 3.10 or newer. Install libsixel for SIXEL output; Kitty conversion
+does not need it. On Debian or Ubuntu:
 
 ```sh
 sudo apt install libsixel1 python3-venv
@@ -21,10 +48,11 @@ python -m pip install git+https://github.com/CryptoDragonLady/sixel-video.git
 ```
 
 On macOS, install libsixel with `brew install libsixel`. Windows Terminal can
-display the output through WSL; install the converter and libsixel inside WSL.
+display SIXEL output through WSL; install the converter and libsixel inside WSL.
+This does not imply support for Kitty animations in Windows Terminal.
 Use `--library /path/to/libsixel.so` for a nonstandard library location.
 
-## Convert
+## SIXEL conversion
 
 ```sh
 sixel-video input.mp4 output.sixel.bz2
@@ -34,7 +62,7 @@ sixel-video input.mp4 output.storage.sixel.bz2 --delta --delta-optimize compress
 
 The default mode encodes complete frames. `--delta` omits pixels whose displayed
 colors are unchanged and inserts a full keyframe at least every second.
-`--keyframe-interval 2` changes that maximum interval to two seconds. All modes
+`--keyframe-interval 2` changes that maximum interval to two seconds. SIXEL modes
 retain the input dimensions and frame count, using up to 256 colors per frame.
 The encoder creates a fresh palette context each frame to avoid stale color
 mappings when scenes change.
@@ -53,11 +81,41 @@ color quantization itself is lossy. Full frames are used when a patch needs all
 `--colors 128` reduces the palette to save space at the cost of color fidelity.
 `--colors 255` also guarantees room for the delta encoder's unpainted index.
 
+## Kitty conversion
+
+```sh
+sixel-video input.mp4 clip.kitty.bz2 --format kitty --verbose
+sixel-video input.mp4 clip.delta.kitty.bz2 --format kitty --delta --delta-region adaptive
+sixel-video input.mp4 clip.small.kitty.bz2 --format kitty --delta \
+  --delta-optimize compressed --kitty-deduplicate --verbose
+bzcat clip.small.kitty.bz2
+```
+
+Kitty output preserves the decoded RGB values exactly by default. `--kitty-format
+auto` compares lossless RGB with PNG, choosing the cheaper payload. RGB uses
+native zlib compression by default; PNG includes its own compression. Delta
+updates use cropped pixel rectangles or transparent RGBA overlays, with periodic
+full keyframes. There is no palette limit.
+
+Native animation loads all frames before starting, then the terminal handles the
+source frame timing and one playback loop. `--kitty-loops 0` repeats indefinitely.
+`--kitty-deduplicate` requires `--delta` and merges unchanged updates into a
+longer frame duration. Loading an entire animation uses terminal image storage;
+long or high-resolution clips can exceed its quota.
+
+For basic Kitty image support and bounded terminal storage, use `--kitty-mode
+stream`. It outputs independent full-frame lines for an externally paced player;
+deltas and native loop controls require animation mode.
+
+See [Kitty options and optimization notes](docs/kitty.md) for the format comparison,
+all switches, compatibility limits, and further possibilities such as native
+frame composition for motion compensation.
+
 ## Additional optimizations
 
-Each option is independent and defaults off. The output remains ordinary sixel
-commands that the terminal renders directly; these options require no extra
-playback decoder.
+Each option is independent and defaults off. Output remains native terminal
+commands. The table below describes SIXEL; Kitty also supports denoising and
+bounded color skipping, with the differences described in its documentation.
 
 | Option | Behavior | Tradeoff |
 | --- | --- | --- |
@@ -101,9 +159,9 @@ the same capability check; it falls back to text when support is unavailable.
 `--progress text` skips the query. Redirected progress contains no escape codes.
 `--quiet` suppresses progress and final statistics.
 
-## Playback
+## SIXEL and stream playback
 
-Each decompressed line is one complete sixel update. Feed those updates to the
+Each decompressed SIXEL or Kitty stream line is one complete update. Feed those updates to the
 terminal at the source video's frame rate. For example, for a 25 fps video:
 
 ```sh
@@ -127,7 +185,11 @@ decompresses incrementally but does not regulate playback speed. The existing
 [rickrollrc player](https://github.com/CryptoDragonLady/rickrollrc) provides
 capability detection, frame pacing and audio for its bundled assets.
 
-For distribution limits, `--split-mib 64` splits the compressed byte stream and
+`--compression none` writes raw protocol bytes instead of bzip2. For native Kitty
+animation, `cat clip.kitty` plays this raw file. For paced SIXEL or Kitty streams,
+replace `bz2.open` with `open` in the example when using raw output.
+
+For distribution limits, `--split-mib 64` splits the output byte stream and
 writes a `.parts` manifest. Concatenating those pieces in manifest order exactly
 recreates the single stream; ordinary conversion always produces one file.
 
@@ -137,10 +199,11 @@ recreates the single stream; ordinary conversion always produces one file.
 python -m pip install -e .
 python -B -m unittest discover -s tests -v
 python benchmarks/convert.py input.mp4 --frames 150 --repeat 3
+python benchmarks/convert.py input.mp4 --frames 150 --repeat 3 --format kitty --delta-region adaptive
 ```
 
-Tests use generated video fixtures and independently interpret sixel commands to
-verify pixel reconstruction, palette changes, keyframe cadence and terminal
+Tests use generated video fixtures and independently interpret both graphics
+protocols to verify pixel reconstruction, palette changes, timing, keyframe cadence and terminal
 capability handling. GitHub Actions runs them on supported CPython versions.
 The benchmark separates decoding, encoding and bzip2 costs and can also emit a
 Python profile with `--profile /tmp/sixel-video.prof`.

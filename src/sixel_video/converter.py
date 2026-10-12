@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert an MP4 to compressed, one-frame-per-line sixel animation."""
+"""Convert videos into terminal-native SIXEL or Kitty graphics animations."""
 
 import argparse
 import bz2
@@ -468,9 +468,22 @@ class SplitOutput:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--version", action="version", version="sixel-video 0.1.0")
+    parser.add_argument("--version", action="version", version="sixel-video 0.2.0")
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--format", choices=("sixel", "kitty"), default="sixel", help="Output protocol (default: sixel)")
+    parser.add_argument("--compression", choices=("bzip2", "none"), default="bzip2",
+                        help="Outer file compression (default: bzip2); independent of Kitty payload compression")
+    parser.add_argument("--kitty-format", choices=("auto", "rgb", "png"), default="auto",
+                        help="Kitty payload format; auto selects the cheaper lossless representation")
+    parser.add_argument("--kitty-compression", choices=("zlib", "none"), default="zlib",
+                        help="Compress raw Kitty RGB/RGBA payloads (default: zlib); PNG has built-in compression")
+    parser.add_argument("--kitty-mode", choices=("animation", "stream"), default="animation",
+                        help="Kitty native timed animation or externally paced full-frame lines (default: animation)")
+    parser.add_argument("--kitty-image-id", type=int, default=42, help="Kitty image ID, 1..4294967295 (default: 42)")
+    parser.add_argument("--kitty-loops", type=int, default=1, help="Kitty animation loop count; 0 loops forever (default: 1)")
+    parser.add_argument("--kitty-deduplicate", action="store_true",
+                        help="With Kitty animation deltas, extend the preceding frame's duration for repeated frames")
     parser.add_argument("--library", help="Path to the libsixel shared library")
     parser.add_argument("--colors", type=int, default=256, choices=range(2, 257), metavar="2..256")
     parser.add_argument("--palette", choices=("frame", "scene"), default="frame",
@@ -484,11 +497,11 @@ def main():
     parser.add_argument("--split-mib", type=int, default=0, help="Split compressed output into parts of this size (0 disables splitting)")
     parser.add_argument("--delta", action="store_true", help="Draw only changed pixels between full keyframes (default: full frames)")
     parser.add_argument("--delta-optimize", choices=("raw", "compressed"), default="raw",
-                        help="Choose delta/full frames by raw sixel length or trial bzip2 size (default: raw)")
+                        help="Choose delta/full frames by raw protocol length or trial bzip2 size (default: raw)")
     parser.add_argument("--accelerator", choices=("auto", "numpy", "cython"), default="auto",
                         help="Delta comparison backend; auto uses the optional Cython extension when installed")
     parser.add_argument("--delta-threshold", type=int, default=0, choices=range(101), metavar="0..100",
-                        help="Skip color changes within this many sixel RGB percentage points (default: 0, exact)")
+                        help="Skip color changes within this many RGB percentage points (default: 0, exact)")
     parser.add_argument("--delta-region", choices=("sparse", "rectangle", "adaptive"), default="sparse",
                         help="Try changed pixels, their filled bounding rectangle, or both (default: sparse)")
     parser.add_argument("--keyframe-interval", type=float, default=1.0, metavar="SECONDS",
@@ -499,6 +512,21 @@ def main():
     parser.add_argument("--progress", choices=("auto", "text", "sixel"), default="auto",
                         help="Progress bar style with --verbose; sixel requires terminal support (default: auto)")
     args = parser.parse_args()
+    kitty_options = ("--kitty-format", "--kitty-compression", "--kitty-mode", "--kitty-image-id",
+                     "--kitty-loops", "--kitty-deduplicate")
+    if args.format != "kitty" and any(option.split("=", 1)[0] in kitty_options for option in sys.argv[1:]):
+        parser.error("--kitty-* options require --format kitty")
+    if args.format == "kitty":
+        if args.palette != "frame" or args.colors != 256 or args.scene_threshold != 35:
+            parser.error("--palette, --colors and --scene-threshold are SIXEL-only; Kitty preserves true color")
+        if args.accelerator != "auto":
+            parser.error("--accelerator selects the SIXEL comparison backend; Kitty uses NumPy")
+        if not 1 <= args.kitty_image_id <= 4294967295 or not 0 <= args.kitty_loops < 4294967295:
+            parser.error("--kitty-image-id must be 1..4294967295 and --kitty-loops 0..4294967294")
+        if args.kitty_mode == "stream" and (args.delta or args.kitty_deduplicate or args.kitty_loops != 1):
+            parser.error("Kitty stream mode uses full frames; deltas, deduplication and loops require animation mode")
+        if args.kitty_deduplicate and not args.delta:
+            parser.error("--kitty-deduplicate requires --delta")
     if args.delta_optimize != "raw" and not args.delta:
         parser.error("--delta-optimize compressed requires --delta")
     if args.accelerator != "auto" and not args.delta:
@@ -529,19 +557,33 @@ def main():
     if not math.isfinite(fps) or fps <= 0:
         capture.release()
         parser.error("Source video must report a positive frame rate")
-    encoder = SixelEncoder(args.library, args.colors, args.palette, args.scene_threshold)
+    if args.format == "kitty" and fps > 1000:
+        capture.release()
+        parser.error("Kitty animation timing has millisecond resolution; frame rates above 1000 are unsupported")
+    encoder = None
+    delta = None
     try:
-        delta = DeltaEncoder(encoder, max(1, math.floor(fps * args.keyframe_interval)), args.delta_optimize,
-                             args.accelerator, args.delta_threshold, args.delta_region) if args.delta else None
-    except RuntimeError as error:
-        encoder.close()
+        interval = max(1, math.floor(fps * args.keyframe_interval))
+        if args.format == "kitty":
+            from .kitty import KittyEncoder
+
+            encoder = KittyEncoder(fps, args.delta, interval, args.delta_optimize, args.delta_threshold,
+                                   args.delta_region, args.kitty_format, args.kitty_compression, args.kitty_mode,
+                                   args.kitty_image_id, args.kitty_loops, args.kitty_deduplicate)
+        else:
+            encoder = SixelEncoder(args.library, args.colors, args.palette, args.scene_threshold)
+            delta = DeltaEncoder(encoder, interval, args.delta_optimize, args.accelerator,
+                                 args.delta_threshold, args.delta_region) if args.delta else None
+    except (OSError, RuntimeError) as error:
+        if encoder is not None:
+            encoder.close()
         capture.release()
         parser.error(str(error))
-    compressor = bz2.BZ2Compressor(9)
+    compressor = bz2.BZ2Compressor(9) if args.compression == "bzip2" else None
     output = SplitOutput(args.output, args.split_mib * 1024 * 1024) if args.split_mib else args.output.open("wb")
     count = 0
     compressed_bytes = 0
-    sixel_bytes = 0
+    protocol_bytes = 0
     started = time.monotonic()
     progress = ConversionProgress(expected_frames, args.library, args.progress) if args.verbose else None
     denoiser = TemporalDenoiser(args.denoise, args.denoise_threshold)
@@ -555,8 +597,8 @@ def main():
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             rgb = denoiser.process(rgb)
             data = (delta or encoder).encode(rgb)
-            sixel_bytes += len(data)
-            compressed = compressor.compress(data)
+            protocol_bytes += len(data)
+            compressed = compressor.compress(data) if compressor else data
             output.write(compressed)
             compressed_bytes += len(compressed)
             count += 1
@@ -566,9 +608,15 @@ def main():
                 print("Converted {} / {} frames".format(count, expected_frames), flush=True)
         if count != expected_frames:
             raise RuntimeError("Decoded {} frames, expected {}".format(count, expected_frames))
+        if args.format == "kitty":
+            ending = encoder.finish()
+            protocol_bytes += len(ending)
+            compressed = compressor.compress(ending) if compressor else ending
+            output.write(compressed)
+            compressed_bytes += len(compressed)
         if progress:
             progress.update(count, force=True, stage="Finishing compression")
-        compressed = compressor.flush()
+        compressed = compressor.flush() if compressor else b""
         output.write(compressed)
         compressed_bytes += len(compressed)
         if progress:
@@ -585,17 +633,21 @@ def main():
     if args.quiet:
         return
     print("Converted {} frames at {}x{}, {:g} fps to {}".format(count, width, height, fps, destination))
-    if delta:
-        saving = 100 * (1 - delta.output_bytes / delta.full_bytes) if delta.full_bytes else 0
-        print("Delta frames: {}; full keyframes: {}; sixel bytes: {} versus {} full ({:.1f}% smaller)".format(
-            delta.delta_frames, delta.keyframes, delta.output_bytes, delta.full_bytes, saving))
+    stats = encoder if args.format == "kitty" and args.delta else delta
+    if stats:
+        saving = 100 * (1 - stats.output_bytes / stats.full_bytes) if stats.full_bytes else 0
+        print("Delta frames: {}; full keyframes: {}; {} bytes: {} versus {} full ({:.1f}% smaller)".format(
+            stats.delta_frames, stats.keyframes, args.format, stats.output_bytes, stats.full_bytes, saving))
     if args.verbose:
         elapsed = time.monotonic() - started
-        print("Elapsed: {}; speed: {:.1f} fps; sixel: {:,} bytes; bzip2: {:,} bytes ({:.2f} MiB); delta selection: {}".format(
-            duration(elapsed), count / elapsed if elapsed else 0, sixel_bytes, compressed_bytes,
+        print("Elapsed: {}; speed: {:.1f} fps; {}: {:,} bytes; {}: {:,} bytes ({:.2f} MiB); delta selection: {}".format(
+            duration(elapsed), count / elapsed if elapsed else 0, args.format, protocol_bytes, args.compression, compressed_bytes,
             compressed_bytes / (1024 * 1024), args.delta_optimize))
         if delta:
             print("Delta comparison backend: {}".format(delta.accelerator))
+        if args.format == "kitty":
+            print("Kitty mode: {}; stored frames: {}; repeated frames merged: {}".format(
+                args.kitty_mode, encoder.stored_frames, encoder.repeated_frames))
 
 
 if __name__ == "__main__":

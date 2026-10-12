@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sixel-video"
-version = "0.1.0"
-description = "Convert videos into streamable, compressed sixel animations"
+version = "0.2.0"
+description = "Play video in your terminal with compressed SIXEL and Kitty graphics animations"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

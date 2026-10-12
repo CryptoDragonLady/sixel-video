@@ -12,9 +12,16 @@ import cv2
 from sixel_video.converter import DeltaEncoder, SixelEncoder
 
 
-def convert(frames, interval, mode, accelerator):
-    encoder = SixelEncoder(None, 256)
-    delta = DeltaEncoder(encoder, interval, mode, accelerator) if mode != 'full' else None
+def convert(frames, interval, mode, accelerator, protocol='sixel', fps=25, kitty_options=None):
+    if protocol == 'kitty':
+        from sixel_video.kitty import KittyEncoder
+
+        encoder = KittyEncoder(fps, delta=mode != 'full', keyframe_frames=interval,
+                               optimize='raw' if mode == 'full' else mode, **(kitty_options or {}))
+        delta = None
+    else:
+        encoder = SixelEncoder(None, 256)
+        delta = DeltaEncoder(encoder, interval, mode, accelerator) if mode != 'full' else None
     compressor = bz2.BZ2Compressor(9)
     digest = hashlib.sha256()
     raw_bytes = compressed_bytes = 0
@@ -30,6 +37,16 @@ def convert(frames, interval, mode, accelerator):
             compress_seconds += time.perf_counter() - started
             compressed_bytes += len(data)
             digest.update(data)
+        if protocol == 'kitty':
+            started = time.perf_counter()
+            ending = encoder.finish()
+            encode_seconds += time.perf_counter() - started
+            raw_bytes += len(ending)
+            started = time.perf_counter()
+            data = compressor.compress(ending)
+            compress_seconds += time.perf_counter() - started
+            compressed_bytes += len(data)
+            digest.update(data)
         started = time.perf_counter()
         data = compressor.flush()
         compress_seconds += time.perf_counter() - started
@@ -37,7 +54,7 @@ def convert(frames, interval, mode, accelerator):
         digest.update(data)
         return dict(seconds=encode_seconds + compress_seconds, encode=encode_seconds,
                     compress=compress_seconds, raw=raw_bytes, compressed=compressed_bytes,
-                    digest=digest.hexdigest(), backend=delta.accelerator if delta else 'none')
+                    digest=digest.hexdigest(), backend='kitty' if protocol == 'kitty' else delta.accelerator if delta else 'none')
     finally:
         if delta:
             delta.close()
@@ -50,6 +67,12 @@ def main():
     parser.add_argument('--frames', type=int, default=150)
     parser.add_argument('--repeat', type=int, default=3)
     parser.add_argument('--accelerator', choices=('auto', 'numpy', 'cython'), default='auto')
+    parser.add_argument('--format', choices=('sixel', 'kitty'), default='sixel')
+    parser.add_argument('--kitty-format', choices=('auto', 'rgb', 'png'), default='auto')
+    parser.add_argument('--kitty-compression', choices=('zlib', 'none'), default='zlib')
+    parser.add_argument('--delta-region', choices=('sparse', 'rectangle', 'adaptive'), default='sparse',
+                        help='Kitty region candidates')
+    parser.add_argument('--kitty-deduplicate', action='store_true')
     parser.add_argument('--profile', help='Write a cProfile report to this path')
     args = parser.parse_args()
     if args.frames <= 0 or args.repeat <= 0:
@@ -57,7 +80,10 @@ def main():
     video = cv2.VideoCapture(args.source)
     if not video.isOpened():
         parser.error('Could not open source')
-    interval = max(1, int(video.get(cv2.CAP_PROP_FPS)))
+    fps = video.get(cv2.CAP_PROP_FPS)
+    interval = max(1, int(fps))
+    kitty_options = dict(payload_format=args.kitty_format, compression=args.kitty_compression,
+                         region=args.delta_region, deduplicate=args.kitty_deduplicate)
     frames = []
     started = time.perf_counter()
     try:
@@ -72,7 +98,8 @@ def main():
         parser.error('No decoded frames')
     print('Decoded {} frames in {:.3f}s; encoding measurements reuse these RGB frames.'.format(len(frames), time.perf_counter() - started))
     for mode in ('full', 'raw', 'compressed'):
-        results = [convert(frames, interval, mode, args.accelerator) for _ in range(args.repeat)]
+        results = [convert(frames, interval, mode, args.accelerator, args.format, fps, kitty_options)
+                   for _ in range(args.repeat)]
         assert all(row['digest'] == results[0]['digest'] for row in results), 'Nondeterministic output'
         median = statistics.median(row['seconds'] for row in results)
         result = results[0]
@@ -82,7 +109,7 @@ def main():
             result['raw'], result['compressed'], result['digest']))
     if args.profile:
         profiler = cProfile.Profile()
-        profiler.runcall(convert, frames, interval, 'raw', args.accelerator)
+        profiler.runcall(convert, frames, interval, 'raw', args.accelerator, args.format, fps, kitty_options)
         profiler.dump_stats(args.profile)
 
 

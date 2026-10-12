@@ -9,3 +9,5 @@ dist/
 *.mp4
 *.sixel
 *.sixel.bz2*
+*.kitty
+*.kitty.bz2*
