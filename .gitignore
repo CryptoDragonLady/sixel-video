@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+*.egg-info/
+build/
+dist/
+.venv/
+*.mp4
+*.sixel
+*.sixel.bz2*

@@ -1,0 +1,21 @@
+name: Test
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.13"]
+        accelerator: ["numpy", "cython"]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      SIXEL_VIDEO_BUILD_CYTHON: ${{ matrix.accelerator == 'cython' && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: sudo apt-get update && sudo apt-get install -y libsixel1
+      - run: python -m pip install . build
+      - run: python -B -m unittest discover -s tests -v
+      - run: python -m build --outdir /tmp/sixel-video-dist
