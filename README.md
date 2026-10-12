@@ -208,6 +208,20 @@ capability handling. GitHub Actions runs them on supported CPython versions.
 The benchmark separates decoding, encoding and bzip2 costs and can also emit a
 Python profile with `--profile /tmp/sixel-video.prof`.
 
+For a reproducible comparison of 40 option sets across SIXEL and Kitty:
+
+```sh
+python benchmarks/options.py input.mp4 --frames 500 --repeat 3 \
+  --json-output /tmp/sixel-video-options.json \
+  --document docs/benchmarks/options.md
+```
+
+This reports actual output sizes, median conversion times, frame structure, and
+sampled reconstruction quality. It also verifies repeated output hashes and
+checks that cached source pixels remain unchanged. The complete matrix includes
+the optional Cython backend; install it first or use `--only` to select other rows.
+Raw receipts and generated animations are kept out of the repository.
+
 The project began as the video converter in rickrollrc. No source videos or
 generated animations are included.
 
