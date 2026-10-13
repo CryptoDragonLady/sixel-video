@@ -52,6 +52,45 @@ display SIXEL output through WSL; install the converter and libsixel inside WSL.
 This does not imply support for Kitty animations in Windows Terminal.
 Use `--library /path/to/libsixel.so` for a nonstandard library location.
 
+## Benchmark presets
+
+`--preset smallest` and `--preset fastest` select settings for `--format sixel`
+(the default) or `--format kitty`, using the measured winners from the
+[500-frame 720p benchmark](docs/benchmarks/astley-720p.md). `fastest` targets
+conversion time. These are fixed option sets derived from that sample; results
+depend on your content and machine.
+
+```sh
+sixel-video input.mp4 small.sixel.bz2 --preset smallest
+sixel-video input.mp4 fast.sixel.bz2 --preset fastest
+sixel-video input.mp4 small.kitty.bz2 --format kitty --preset smallest
+sixel-video input.mp4 fast.kitty.bz2 --format kitty --preset fastest
+```
+
+| Format | Preset | Selected options, relative to defaults | Benchmark row | Stored MiB | Conversion seconds |
+| --- | --- | --- | --- | ---: | ---: |
+| SIXEL | `smallest` | `--delta --colors 64 --accelerator numpy` | S09 | 48.440 | 20.426 |
+| SIXEL | `fastest` | Full frames, 256 colors | S00 | 72.336 | 19.192 |
+| Kitty | `smallest` | `--delta --delta-threshold 2` | K16 | 173.078 | 496.450 |
+| Kitty | `fastest` | `--kitty-format rgb` with full frames | K01 | 324.671 | 33.140 |
+
+All four use outer bzip2 compression. Kitty uses native animation and zlib on
+RGB/RGBA; the smallest Kitty preset uses auto payload selection and sparse
+deltas. The smallest SIXEL preset uses per-frame palettes and sparse deltas.
+Both delta presets retain the one-second keyframe interval.
+
+**Smallest trades color fidelity for size:** SIXEL uses up to 64 colors per
+frame; Kitty permits up to 5 of 255 per RGB channel relative to the decoded
+source. The fastest presets use full frames and preserve their format's
+default fidelity.
+
+Explicit options override preset settings in either command-line order. For
+example, use `--preset smallest --colors 128` to increase the SIXEL palette, or
+`--format kitty --preset smallest --delta-threshold 0` for exact Kitty updates.
+Existing option compatibility checks still apply: the smallest Kitty preset
+requires animation mode because it enables deltas. Omitting `--preset` retains
+the usual defaults.
+
 ## SIXEL conversion
 
 ```sh

@@ -44,6 +44,8 @@ quality cost.
 | Switch | Default | Purpose |
 | --- | --- | --- |
 | `--format kitty` | SIXEL output | Select Kitty graphics. |
+| `--preset smallest` | Off | Use sparse animation deltas with auto payloads and 2% color tolerance (up to 5 of 255 per RGB channel), matching benchmark K16. |
+| `--preset fastest` | Off | Use full RGB frames with zlib, matching benchmark K01. Explicit options override either preset. |
 | `--kitty-mode animation` | `animation` | Load frames and let the terminal schedule playback. |
 | `--kitty-mode stream` | — | Independent full-frame lines; pace externally. No deltas, deduplication, or native loops. |
 | `--kitty-format auto` | `auto` | Compare RGB/RGBA with PNG using the selected cost. |

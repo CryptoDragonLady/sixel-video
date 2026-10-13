@@ -13,6 +13,19 @@ import sys
 import time
 
 
+# Winners from docs/benchmarks/astley-720p.md, relative to the CLI defaults.
+PRESETS = {
+    "sixel": {
+        "smallest": {"delta": True, "colors": 64, "accelerator": "numpy"},  # S09
+        "fastest": {},  # S00: full frames, 256 colors, bzip2
+    },
+    "kitty": {
+        "smallest": {"delta": True, "delta_threshold": 2},  # K16
+        "fastest": {"kitty_format": "rgb"},  # K01: full RGB frames, zlib, bzip2
+    },
+}
+
+
 class SixelEncoder:
     def __init__(self, library, colors, palette_mode="frame", scene_threshold=35):
         self.lib = ctypes.CDLL(library or ctypes.util.find_library("sixel") or "libsixel.so.1")
@@ -472,6 +485,8 @@ def main():
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--format", choices=("sixel", "kitty"), default="sixel", help="Output protocol (default: sixel)")
+    parser.add_argument("--preset", choices=("smallest", "fastest"),
+                        help="Apply benchmark settings for the output format; smallest reduces color fidelity; explicit options override")
     parser.add_argument("--compression", choices=("bzip2", "none"), default="bzip2",
                         help="Outer file compression (default: bzip2); independent of Kitty payload compression")
     parser.add_argument("--kitty-format", choices=("auto", "rgb", "png"), default="auto",
@@ -512,6 +527,11 @@ def main():
     parser.add_argument("--progress", choices=("auto", "text", "sixel"), default="auto",
                         help="Progress bar style with --verbose; sixel requires terminal support (default: auto)")
     args = parser.parse_args()
+    if args.preset:
+        # Reparse with preset defaults so explicit options win in either order,
+        # including overrides that equal an option's original default.
+        parser.set_defaults(**PRESETS[args.format][args.preset])
+        args = parser.parse_args()
     kitty_options = ("--kitty-format", "--kitty-compression", "--kitty-mode", "--kitty-image-id",
                      "--kitty-loops", "--kitty-deduplicate")
     if args.format != "kitty" and any(option.split("=", 1)[0] in kitty_options for option in sys.argv[1:]):
