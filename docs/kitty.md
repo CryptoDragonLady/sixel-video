@@ -105,6 +105,12 @@ That is about 9.5% less stored data with exact reconstruction. Both selection
 heuristics picked the same updates for this sample. This is a sample result,
 not a promised reduction for other videos or for the complete clip.
 
+The [500-frame 720p benchmark](benchmarks/astley-720p.md) compares 40 SIXEL and
+Kitty configurations, with three runs each. At 1280×720, exact adaptive Kitty
+deltas reduced the bzip2 size by 5.03%, from 190.923 to 181.323 MiB, while median
+conversion time increased from 256.994 to 809.853 seconds. It includes RGB/PNG,
+compression, region, tolerance, denoising, and deduplication comparisons.
+
 ## Other possibilities
 
 Kitty's native **frame composition** command can copy a pixel rectangle from

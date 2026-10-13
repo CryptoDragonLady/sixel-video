@@ -208,7 +208,9 @@ capability handling. GitHub Actions runs them on supported CPython versions.
 The benchmark separates decoding, encoding and bzip2 costs and can also emit a
 Python profile with `--profile /tmp/sixel-video.prof`.
 
-For a reproducible comparison of 40 option sets across SIXEL and Kitty:
+Read the [500-frame 720p Astley benchmark](docs/benchmarks/astley-720p.md) for
+measured sizes, conversion times, frame counts, fidelity, and exact option sets.
+To compare the same 40 option sets on your own source:
 
 ```sh
 python benchmarks/options.py input.mp4 --frames 500 --repeat 3 \
